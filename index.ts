@@ -21,7 +21,7 @@ import os from "os";
 // ============ ENVIRONMENT VARIABLES =============
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
-const AWS_S3_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
+const AWS_S3_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME || 'youtube-video-000';
 const AWS_REGION = process.env.AWS_REGION || 'us-west-2'; // 기본 리전 설정
 
 // Basic validation:
