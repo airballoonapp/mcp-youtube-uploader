@@ -1,6 +1,6 @@
 {
     "name": "youtube-mcp-server",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "MCP server for searching YouTube, downloading videos, uploading to S3, and optional TwelveLabs import",
     "license": "MIT",
     "type": "module",
