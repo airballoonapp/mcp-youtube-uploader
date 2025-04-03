@@ -1,0 +1,29 @@
+{
+    "name": "youtube-mcp-server",
+    "version": "0.1.0",
+    "description": "MCP server for searching YouTube, downloading videos, uploading to S3, and optional TwelveLabs import",
+    "license": "MIT",
+    "type": "module",
+    "bin": {
+        "youtube-mcp-server": "./index.js"
+    },
+    "scripts": {
+        "build": "tsc",
+        "prepare": "npm run build",
+        "start": "node ./index.js",
+        "dev": "tsc && node ./index.js"
+    },
+    "dependencies": {
+        "@aws-sdk/client-s3": "^3.779.0",
+        "@modelcontextprotocol/sdk": "^1.8.0",
+        "uuid": "^9.0.1",
+        "ytdl-core": "^4.11.5",
+        "ytsr": "^3.8.4"
+    },
+    "devDependencies": {
+        "@types/aws-sdk": "^0.0.42",
+        "@types/node": "^18.16.19",
+        "@types/uuid": "^10.0.0",
+        "typescript": "^5.2.2"
+    }
+}
