@@ -1,11 +1,11 @@
 {
-    "name": "youtube-mcp-server",
-    "version": "0.1.1",
-    "description": "MCP server for searching YouTube, downloading videos, uploading to S3, and optional TwelveLabs import",
+    "name": "youtube-s3-uploader",
+    "version": "1.0.0",
+    "description": "MCP server for searching YouTube, downloading videos, uploading to S3",
     "license": "MIT",
     "type": "module",
     "bin": {
-        "youtube-mcp-server": "./index.js"
+        "youtube-s3-uploader": "./index.js"
     },
     "scripts": {
         "build": "tsc",
