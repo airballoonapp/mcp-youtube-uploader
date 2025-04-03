@@ -56,13 +56,14 @@ const jobsMap = new Map<string, JobStatus>();
 const YOUTUBE_SEARCH_TOOL: Tool = {
     name: "youtube_search",
     description:
-        "Search YouTube for videos matching a query. Returns a list of up to maxResults YouTube video URLs. " +
-        "Ideal for discovering relevant video content by keyword.",
+        "YouTube에서 키워드로 비디오를 검색합니다. 최대 maxResults 개수만큼의 YouTube 비디오 URL 목록을 반환합니다. " +
+        "이 URL은 직접적인 비디오 파일 URL이 아닌 YouTube 웹사이트 URL(예: https://youtube.com/watch?v=xxxx)입니다. " +
+        "이 YouTube URL은 TwelveLabs의 video_upload 도구에 직접 사용할 수 없으며, upload_videos_s3 도구를 통해 S3로 업로드한 후 얻은 URL을 사용해야 합니다.",
     inputSchema: {
         type: "object",
         properties: {
-            query: { type: "string", description: "The search keyword(s)" },
-            maxResults: { type: "number", description: "Max number of results to return", default: 10 },
+            query: { type: "string", description: "검색할 키워드" },
+            maxResults: { type: "number", description: "반환할 최대 결과 수", default: 10 },
         },
         required: ["query"],
     },
@@ -101,19 +102,21 @@ async function youtubeSearchHandler(args: any) {
 const UPLOAD_VIDEOS_S3_TOOL: Tool = {
     name: "upload_videos_s3",
     description:
-        "Given a list of YouTube video URLs, downloads them locally as mp4, then uploads them to S3, makes them public, and returns a job ID. " +
-        "The job is processed asynchronously, and you can check its status with check_upload_job_status.",
+        "YouTube 비디오 URL 목록을 받아 로컬에 mp4로 다운로드한 후 S3에 업로드하고 공개 액세스 가능한 상태로 만들어 작업 ID를 반환합니다. " +
+        "이 작업은 비동기적으로 처리되며, 상태는 check_upload_job_status 도구로 확인할 수 있습니다. " +
+        "완료 후 반환되는 S3 URL(https://<bucket>.s3.<region>.amazonaws.com/<filename>.mp4 형식)은 " +
+        "TwelveLabs의 upload_videos 도구에 직접 사용할 수 있는 raw 비디오 파일 URL입니다.",
     inputSchema: {
         type: "object",
         properties: {
             videoUrls: {
                 type: "array",
                 items: { type: "string" },
-                description: "Array of YouTube video URLs"
+                description: "YouTube 비디오 URL 배열 (https://youtube.com/watch?v=xxxx 또는 https://youtu.be/xxxx 형식)"
             },
             bucketName: {
                 type: "string",
-                description: "Override the default S3 bucket name",
+                description: "기본 S3 버킷 이름 대신 사용할 버킷 이름 (선택사항)",
             },
         },
         required: ["videoUrls"],
@@ -124,13 +127,15 @@ const UPLOAD_VIDEOS_S3_TOOL: Tool = {
 const CHECK_UPLOAD_JOB_STATUS_TOOL: Tool = {
     name: "check_upload_job_status",
     description:
-        "Check the status of an asynchronous video upload job. Returns the job status and public URLs of uploaded videos if completed.",
+        "비동기 비디오 업로드 작업의 상태를 확인합니다. 작업 상태와 업로드된 비디오의 공개 S3 URL을 반환합니다. " +
+        "완료된 작업의 경우 반환되는 S3 URL(https://<bucket>.s3.<region>.amazonaws.com/<filename>.mp4 형식)은 " +
+        "TwelveLabs의 upload_videos 도구에 직접 입력할 수 있는 raw 비디오 파일 URL입니다.",
     inputSchema: {
         type: "object",
         properties: {
             jobId: {
                 type: "string",
-                description: "Job ID returned from the upload_videos_s3 tool"
+                description: "upload_videos_s3 도구에서 반환된 작업 ID"
             }
         },
         required: ["jobId"],
@@ -141,13 +146,16 @@ const CHECK_UPLOAD_JOB_STATUS_TOOL: Tool = {
 const GET_JOB_URLS_TOOL: Tool = {
     name: "get_job_urls",
     description:
-        "Get only the list of public URLs from a completed upload job. If the job is not completed yet, returns an empty list.",
+        "완료된 업로드 작업에서 공개 S3 URL 목록만 반환합니다. 작업이 아직 완료되지 않은 경우 빈 목록을 반환합니다. " +
+        "반환되는 S3 URL(https://<bucket>.s3.<region>.amazonaws.com/<filename>.mp4 형식)은 " +
+        "TwelveLabs의 upload_videos 도구에 직접 사용할 수 있는 raw 비디오 파일 URL입니다. " +
+        "이 S3 URL은 TwelveLabs에서 비디오 인덱싱 및 분석을 위해 사용됩니다.",
     inputSchema: {
         type: "object",
         properties: {
             jobId: {
                 type: "string", 
-                description: "Job ID returned from the upload_videos_s3 tool"
+                description: "upload_videos_s3 도구에서 반환된 작업 ID"
             }
         },
         required: ["jobId"],
@@ -316,7 +324,7 @@ async function processVideosAsync(jobId: string, videoUrls: string[], bucket: st
                     preferFreeFormats: true
                 });
                 
-                // 3) S3에 업로드
+                // 3) S3에 업로드 - 생성되는 URL은 TwelveLabs의 upload_videos에 직접 사용 가능합니다
                 const putParams: any = {
                     Bucket: bucket,
                     Key: fileName,
@@ -326,7 +334,7 @@ async function processVideosAsync(jobId: string, videoUrls: string[], bucket: st
                 };
                 await s3.send(new PutObjectCommand(putParams));
 
-                // 공개 URL
+                // 공개 URL - TwelveLabs의 upload_videos 도구에 직접 사용 가능한 형식입니다
                 const publicUrl = `https://${bucket}.s3.${AWS_REGION}.amazonaws.com/${fileName}`;
                 publicUrls.push(publicUrl);
                 
