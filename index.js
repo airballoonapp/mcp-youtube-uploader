@@ -171,6 +171,182 @@ const LIST_S3_VIDEOS_TOOL = {
         required: [],
     },
 };
+////////////////////////////////////////////////////////////////////////////////
+// YouTube 비디오 정보 가져오기
+////////////////////////////////////////////////////////////////////////////////
+const GET_YOUTUBE_VIDEO_INFO_TOOL = {
+    name: "get_youtube_video_info",
+    description: "YouTube 비디오 ID를 받아 해당 영상의 정보(제목, 길이, 좋아요 수, 조회수, 댓글 수 등)를 가져옵니다. " +
+        "YouTube ID는 YouTube URL에서 추출할 수 있으며, 일반적으로 'https://www.youtube.com/watch?v={youtubeId}' 형식입니다.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            videoId: {
+                type: "string",
+                description: "YouTube 비디오 ID (예: 'dQw4w9WgXcQ')"
+            }
+        },
+        required: ["videoId"],
+    },
+};
+const GET_YOUTUBE_VIDEO_INFO_BY_URL_TOOL = {
+    name: "get_youtube_video_info_by_url",
+    description: "YouTube 비디오 URL을 받아 해당 영상의 정보(제목, 길이, 좋아요 수, 조회수, 댓글 수 등)를 가져옵니다. " +
+        "URL은 'https://www.youtube.com/watch?v={youtubeId}' 또는 'https://youtu.be/{youtubeId}' 형식이어야 합니다.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            url: {
+                type: "string",
+                description: "YouTube 비디오 URL (예: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')"
+            }
+        },
+        required: ["url"],
+    },
+};
+/**
+ * YouTube 비디오 ID를 받아 영상 정보를 가져오는 함수
+ * @param videoId YouTube 비디오 ID
+ * @returns YouTubeVideoInfo 객체
+ */
+async function getYouTubeVideoInfo(videoId) {
+    // YouTube URL 생성
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+    try {
+        // youtube-dl-exec를 사용하여 영상 정보 가져오기
+        const result = await youtubeDl.exec(url, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            skipDownload: true,
+            youtubeSkipDashManifest: true
+        });
+        const info = JSON.parse(result.stdout);
+        // YouTubeVideoInfo 형식으로 변환
+        const videoInfo = {
+            id: videoId,
+            title: info.title || null,
+            url: url,
+            duration: info.duration || null,
+            uploadDate: info.upload_date || null,
+            viewCount: info.view_count || null,
+            likeCount: info.like_count || null,
+            dislikeCount: info.dislike_count || null,
+            commentCount: info.comment_count || null,
+            description: info.description || null,
+            channel: {
+                id: info.channel_id || null,
+                name: info.uploader || info.channel || null,
+                url: info.channel_url || null,
+                subscriberCount: info.subscriber_count || null
+            },
+            thumbnails: info.thumbnails || null,
+            categories: info.categories || null,
+            tags: info.tags || null,
+            isLive: info.is_live || false
+        };
+        return videoInfo;
+    }
+    catch (error) {
+        console.error(`YouTube 비디오 정보를 가져오는 중 오류 발생: ${error}`);
+        throw new Error(`YouTube 비디오 정보를 가져오는 중 오류가 발생했습니다: ${error}`);
+    }
+}
+/**
+ * YouTube 비디오 URL을 받아 영상 정보를 가져오는 함수
+ * @param url YouTube 비디오 URL
+ * @returns YouTubeVideoInfo 객체
+ */
+async function getYouTubeVideoInfoByUrl(url) {
+    // URL에서 비디오 ID 추출
+    const videoId = extractYoutubeId(url);
+    if (!videoId) {
+        throw new Error(`유효한 YouTube URL이 아닙니다: ${url}`);
+    }
+    // ID를 사용하여 비디오 정보 가져오기
+    return getYouTubeVideoInfo(videoId);
+}
+async function getYouTubeVideoInfoHandler(args) {
+    const { videoId } = args;
+    if (!videoId || typeof videoId !== 'string') {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        error: "유효한 YouTube 비디오 ID가 필요합니다."
+                    }, null, 2),
+                },
+            ],
+            isError: true,
+        };
+    }
+    try {
+        const videoInfo = await getYouTubeVideoInfo(videoId);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(videoInfo, null, 2),
+                },
+            ],
+            isError: false,
+        };
+    }
+    catch (err) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        error: `YouTube 비디오 정보를 가져오는 중 오류가 발생했습니다: ${err.message}`
+                    }, null, 2),
+                },
+            ],
+            isError: true,
+        };
+    }
+}
+async function getYouTubeVideoInfoByUrlHandler(args) {
+    const { url } = args;
+    if (!url || typeof url !== 'string') {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        error: "유효한 YouTube URL이 필요합니다."
+                    }, null, 2),
+                },
+            ],
+            isError: true,
+        };
+    }
+    try {
+        const videoInfo = await getYouTubeVideoInfoByUrl(url);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(videoInfo, null, 2),
+                },
+            ],
+            isError: false,
+        };
+    }
+    catch (err) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        error: `YouTube 비디오 정보를 가져오는 중 오류가 발생했습니다: ${err.message}`
+                    }, null, 2),
+                },
+            ],
+            isError: true,
+        };
+    }
+}
 // 유튜브 URL에서 동영상 ID를 추출하는 함수
 function extractYoutubeId(url) {
     let regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -570,7 +746,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             UPLOAD_VIDEOS_S3_TOOL,
             CHECK_UPLOAD_JOB_STATUS_TOOL,
             GET_JOB_URLS_TOOL,
-            LIST_S3_VIDEOS_TOOL
+            LIST_S3_VIDEOS_TOOL,
+            GET_YOUTUBE_VIDEO_INFO_TOOL,
+            GET_YOUTUBE_VIDEO_INFO_BY_URL_TOOL
         ],
     };
 });
@@ -587,6 +765,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             return getJobUrlsHandler(toolArgs);
         case "list_s3_videos":
             return listS3VideosHandler(toolArgs);
+        case "get_youtube_video_info":
+            return getYouTubeVideoInfoHandler(toolArgs);
+        case "get_youtube_video_info_by_url":
+            return getYouTubeVideoInfoByUrlHandler(toolArgs);
         default:
             return {
                 content: [
