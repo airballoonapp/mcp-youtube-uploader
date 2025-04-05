@@ -1,6 +1,6 @@
 {
     "name": "youtube-s3-uploader",
-    "version": "1.0.18",
+    "version": "1.0.19",
     "description": "MCP server for searching YouTube, downloading videos, uploading to S3",
     "license": "MIT",
     "type": "module",
