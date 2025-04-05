@@ -303,7 +303,7 @@ async function getYouTubeVideoInfoFromAPI(videoId: string): Promise<YouTubeVideo
             return null;
         }
 
-        console.log(`[YouTube API 시도] 비디오 ID: ${videoId}`);
+        console.error(`[YouTube API 시도] 비디오 ID: ${videoId}`);
         
         // 비디오 세부 정보 가져오기
         const videoResponse = await youtube.videos.list({
@@ -384,7 +384,7 @@ async function getYouTubeVideoInfoFromAPI(videoId: string): Promise<YouTubeVideo
             isLive: videoData.snippet?.liveBroadcastContent === 'live'
         };
         
-        console.log(`[YouTube API 성공] ID: ${videoId}, 제목: ${info.title}`);
+        console.error(`[YouTube API 성공] ID: ${videoId}, 제목: ${info.title}`);
         return info;
         
     } catch (error) {
@@ -435,7 +435,7 @@ async function getYouTubeVideoInfo(videoId: string): Promise<YouTubeVideoInfo> {
         
         // 2. youtube-dl-exec 사용 시도
         try {
-            console.log(`[youtube-dl-exec 시도] URL: ${url}`);
+            console.error(`[youtube-dl-exec 시도] URL: ${url}`);
             const result = await youtubeDl(url, {
                 dumpSingleJson: true,
                 noCheckCertificates: true,
@@ -450,7 +450,7 @@ async function getYouTubeVideoInfo(videoId: string): Promise<YouTubeVideoInfo> {
             
             // 정보가 있는지 확인
             if (info && info.title) {
-                console.log(`[youtube-dl-exec 성공] ${url} - 제목: ${info.title}`);
+                console.error(`[youtube-dl-exec 성공] ${url} - 제목: ${info.title}`);
                 
                 // YouTubeVideoInfo 형식으로 변환
                 return {
@@ -484,12 +484,12 @@ async function getYouTubeVideoInfo(videoId: string): Promise<YouTubeVideoInfo> {
             
             // 3. youtube-dl-exec 실패 시 ytdl-core 시도
             try {
-                console.log(`[ytdl-core 시도] URL: ${url}`);
+                console.error(`[ytdl-core 시도] URL: ${url}`);
                 const info = await ytdl.getInfo(url);
                 
                 // 정보가 있는지 확인
                 if (info && info.videoDetails) {
-                    console.log(`[ytdl-core 성공] ${url} - 제목: ${info.videoDetails.title}`);
+                    console.error(`[ytdl-core 성공] ${url} - 제목: ${info.videoDetails.title}`);
                     
                     // YouTubeVideoInfo 형식으로 변환
                     return {
@@ -1128,7 +1128,7 @@ async function processVideosAsync(jobId: string, videoUrls: string[], bucket: st
 async function downloadVideo(url: string, localPath: string, jobId: string): Promise<boolean> {
     // 1. youtube-dl-exec 사용 시도
     try {
-        console.log(`[youtube-dl-exec 다운로드 시도] URL: ${url}`);
+        console.error(`[youtube-dl-exec 다운로드 시도] URL: ${url}`);
         await youtubeDl(url, {
             output: localPath,
             format: 'best[ext=mp4]/best',
@@ -1139,7 +1139,7 @@ async function downloadVideo(url: string, localPath: string, jobId: string): Pro
         
         // 파일이 존재하고 크기가 0보다 큰지 확인
         if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-            console.log(`[youtube-dl-exec 다운로드 성공] ${url}`);
+            console.error(`[youtube-dl-exec 다운로드 성공] ${url}`);
             return true;
         } else {
             throw new Error(`Downloaded file is empty or does not exist: ${localPath}`);
@@ -1149,7 +1149,7 @@ async function downloadVideo(url: string, localPath: string, jobId: string): Pro
         
         // 2. youtube-dl-exec 실패 시 ytdl-core 시도
         try {
-            console.log(`[ytdl-core 다운로드 시도] URL: ${url}`);
+            console.error(`[ytdl-core 다운로드 시도] URL: ${url}`);
             await new Promise<void>((resolve, reject) => {
                 try {
                     const videoStream = ytdl(url, {
@@ -1193,7 +1193,7 @@ async function downloadVideo(url: string, localPath: string, jobId: string): Pro
             
             // 파일이 존재하고 크기가 0보다 큰지 확인
             if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-                console.log(`[ytdl-core 다운로드 성공] ${url}`);
+                console.error(`[ytdl-core 다운로드 성공] ${url}`);
                 return true;
             } else {
                 throw new Error(`Downloaded file is empty or does not exist: ${localPath}`);
