@@ -11,7 +11,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { S3Client, PutObjectCommand, PutObjectCommandInput, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { v4 as uuidv4 } from "uuid";
 import ytsr from "ytsr";
-import youtubeDl from 'youtube-dl-exec';
+import ytdl from "ytdl-core";
 
 import fs from "fs";
 import path from "path";
@@ -288,38 +288,31 @@ async function getYouTubeVideoInfo(videoId: string): Promise<YouTubeVideoInfo> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     
     try {
-        // youtube-dl-exec를 사용하여 영상 정보 가져오기
-        const result = await youtubeDl.exec(url, {
-            dumpSingleJson: true,
-            noWarnings: true,
-            skipDownload: true,
-            youtubeSkipDashManifest: true
-        });
-        
-        const info = JSON.parse(result.stdout);
+        // ytdl-core를 사용하여 영상 정보 가져오기
+        const info = await ytdl.getInfo(url);
         
         // YouTubeVideoInfo 형식으로 변환
         const videoInfo: YouTubeVideoInfo = {
             id: videoId,
-            title: info.title || null,
+            title: info.videoDetails.title || null,
             url: url,
-            duration: info.duration || null,
-            uploadDate: info.upload_date || null,
-            viewCount: info.view_count || null,
-            likeCount: info.like_count || null,
-            dislikeCount: info.dislike_count || null,
-            commentCount: info.comment_count || null,
-            description: info.description || null,
+            duration: info.videoDetails.lengthSeconds ? parseInt(info.videoDetails.lengthSeconds.toString()) : null,
+            uploadDate: info.videoDetails.publishDate || null,
+            viewCount: info.videoDetails.viewCount ? parseInt(info.videoDetails.viewCount.toString()) : null,
+            likeCount: info.videoDetails.likes ? parseInt(info.videoDetails.likes.toString()) : null,
+            dislikeCount: null, // ytdl-core에서는 지원하지 않음
+            commentCount: null, // ytdl-core에서는 지원하지 않음
+            description: info.videoDetails.description || null,
             channel: {
-                id: info.channel_id || null,
-                name: info.uploader || info.channel || null,
-                url: info.channel_url || null,
-                subscriberCount: info.subscriber_count || null
+                id: info.videoDetails.channelId || null,
+                name: info.videoDetails.author.name || null,
+                url: info.videoDetails.author.channel_url || null,
+                subscriberCount: null // ytdl-core에서는 지원하지 않음
             },
-            thumbnails: info.thumbnails || null,
-            categories: info.categories || null,
-            tags: info.tags || null,
-            isLive: info.is_live || false
+            thumbnails: info.videoDetails.thumbnails || null,
+            categories: null, // ytdl-core에서는 지원하지 않음
+            tags: info.videoDetails.keywords || null,
+            isLive: info.videoDetails.isLiveContent || false
         };
         
         return videoInfo;
@@ -703,16 +696,10 @@ async function processVideosAsync(jobId: string, videoUrls: string[], bucket: st
                     throw new Error(`Could not extract YouTube ID from URL: ${url}`);
                 }
 
-                // 1) 동영상 정보 가져오기
-                const videoInfo = await youtubeDl.exec(url, {
-                    dumpSingleJson: true,
-                    noWarnings: true,
-                    preferFreeFormats: true,
-                    youtubeSkipDashManifest: true
-                });
+                // 1) 동영상 정보 가져오기 (ytdl-core 사용)
+                const info = await ytdl.getInfo(url);
                 
                 // YouTube ID를 포함한 파일명 생성
-                const info = JSON.parse(videoInfo.stdout);
                 const fileName = `youtube_${videoId}.mp4`;
                 const localPath = path.join(tempDir, fileName);
                 
@@ -751,12 +738,41 @@ async function processVideosAsync(jobId: string, videoUrls: string[], bucket: st
                     continue;
                 }
                 
-                // 2) 동영상 다운로드
-                await youtubeDl.exec(url, {
-                    output: localPath,
-                    format: 'best[ext=mp4]/best',
-                    noWarnings: true,
-                    preferFreeFormats: true
+                // 2) 동영상 다운로드 (ytdl-core 사용)
+                await new Promise<void>((resolve, reject) => {
+                    const videoStream = ytdl(url, {
+                        quality: 'highest',
+                        filter: format => format.container === 'mp4'
+                    });
+                    
+                    const fileStream = fs.createWriteStream(localPath);
+                    
+                    videoStream.pipe(fileStream);
+                    
+                    videoStream.on('error', (err) => {
+                        console.error(`[job ${jobId}] Error downloading video: ${err}`);
+                        reject(err);
+                    });
+                    
+                    fileStream.on('finish', () => {
+                        resolve();
+                    });
+                    
+                    fileStream.on('error', (err) => {
+                        console.error(`[job ${jobId}] Error writing video file: ${err}`);
+                        reject(err);
+                    });
+                    
+                    // 타임아웃 설정 (3분)
+                    const timeout = setTimeout(() => {
+                        videoStream.destroy();
+                        fileStream.close();
+                        reject(new Error(`Download timeout for ${url}`));
+                    }, 180000);
+                    
+                    fileStream.on('close', () => {
+                        clearTimeout(timeout);
+                    });
                 });
                 
                 // AWS 리전 값 확인
