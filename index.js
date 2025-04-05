@@ -6,6 +6,8 @@ import { S3Client, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/clien
 import { v4 as uuidv4 } from "uuid";
 import ytsr from "ytsr";
 import ytdl from "ytdl-core";
+import youtubeDl from 'youtube-dl-exec';
+import { google } from 'googleapis';
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -14,9 +16,18 @@ const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
 const AWS_S3_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME || 'youtube-video-000';
 const AWS_REGION = process.env.AWS_REGION || 'us-west-2'; // 기본 리전 설정
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY; // YouTube Data API v3 키
+// YouTube Data API v3 클라이언트 초기화
+const youtube = google.youtube({
+    version: 'v3',
+    auth: YOUTUBE_API_KEY
+});
 // Basic validation:
 if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY || !AWS_S3_BUCKET_NAME) {
     console.error("Missing AWS credentials or bucket name in environment variables.");
+}
+if (!YOUTUBE_API_KEY) {
+    console.warn("YOUTUBE_API_KEY 환경 변수가 설정되지 않았습니다. YouTube Data API를 사용할 수 없어 대체 방법을 사용합니다.");
 }
 const s3 = new S3Client({
     region: AWS_REGION,
@@ -205,6 +216,98 @@ const GET_YOUTUBE_VIDEO_INFO_BY_URL_TOOL = {
     },
 };
 /**
+ * YouTube Data API v3를 사용하여 비디오 정보를 가져오는 함수
+ * @param videoId YouTube 비디오 ID
+ * @returns YouTubeVideoInfo 객체 (성공 시) 또는 null (실패 시)
+ */
+async function getYouTubeVideoInfoFromAPI(videoId) {
+    try {
+        if (!YOUTUBE_API_KEY) {
+            console.warn("YouTube API 키가 없어 API 호출을 건너뜁니다.");
+            return null;
+        }
+        console.log(`[YouTube API 시도] 비디오 ID: ${videoId}`);
+        // 비디오 세부 정보 가져오기
+        const videoResponse = await youtube.videos.list({
+            part: ['snippet', 'contentDetails', 'statistics'],
+            id: [videoId]
+        });
+        const videoData = videoResponse.data.items?.[0];
+        if (!videoData) {
+            console.warn(`[YouTube API] 비디오 ID에 해당하는 데이터를 찾을 수 없습니다: ${videoId}`);
+            return null;
+        }
+        // ISO 8601 포맷의 duration을 초 단위로 변환
+        let durationInSeconds = null;
+        if (videoData.contentDetails?.duration) {
+            const durationString = videoData.contentDetails.duration;
+            const match = durationString.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+            if (match) {
+                const hours = parseInt(match[1] || '0');
+                const minutes = parseInt(match[2] || '0');
+                const seconds = parseInt(match[3] || '0');
+                durationInSeconds = hours * 3600 + minutes * 60 + seconds;
+            }
+        }
+        // 업로드 날짜 포맷 변환 (YYYY-MM-DDThh:mm:ss.sZ -> YYYYMMDD)
+        let uploadDate = null;
+        if (videoData.snippet?.publishedAt) {
+            const dateObj = new Date(videoData.snippet.publishedAt);
+            const year = dateObj.getFullYear();
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            uploadDate = `${year}${month}${day}`;
+        }
+        // 썸네일 정보 추출
+        const thumbnails = [];
+        if (videoData.snippet?.thumbnails) {
+            Object.values(videoData.snippet.thumbnails).forEach(thumbnail => {
+                if (thumbnail && typeof thumbnail === 'object' &&
+                    'url' in thumbnail &&
+                    'width' in thumbnail &&
+                    'height' in thumbnail) {
+                    thumbnails.push({
+                        url: thumbnail.url,
+                        width: thumbnail.width,
+                        height: thumbnail.height
+                    });
+                }
+            });
+        }
+        // 채널 정보 조회 (선택 사항 - API 할당량 때문에 기본적으로 비활성화)
+        let channelInfo = {
+            id: videoData.snippet?.channelId || null,
+            name: videoData.snippet?.channelTitle || null,
+            url: videoData.snippet?.channelId ? `https://www.youtube.com/channel/${videoData.snippet.channelId}` : null,
+            subscriberCount: null
+        };
+        // 최종 정보 구성
+        const info = {
+            id: videoId,
+            title: videoData.snippet?.title || `YouTube Video (${videoId})`,
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            duration: durationInSeconds,
+            uploadDate: uploadDate,
+            viewCount: videoData.statistics?.viewCount ? parseInt(videoData.statistics.viewCount) : null,
+            likeCount: videoData.statistics?.likeCount ? parseInt(videoData.statistics.likeCount) : null,
+            dislikeCount: null, // YouTube API에서 싫어요 수는 더 이상 제공하지 않음
+            commentCount: videoData.statistics?.commentCount ? parseInt(videoData.statistics.commentCount) : null,
+            description: videoData.snippet?.description || null,
+            channel: channelInfo,
+            thumbnails: thumbnails.length > 0 ? thumbnails : null,
+            categories: videoData.snippet?.categoryId ? [videoData.snippet.categoryId] : null,
+            tags: videoData.snippet?.tags || null,
+            isLive: videoData.snippet?.liveBroadcastContent === 'live'
+        };
+        console.log(`[YouTube API 성공] ID: ${videoId}, 제목: ${info.title}`);
+        return info;
+    }
+    catch (error) {
+        console.error(`[YouTube API 실패] ${videoId}: ${error}`);
+        return null;
+    }
+}
+/**
  * YouTube 비디오 ID를 받아 영상 정보를 가져오는 함수
  * @param videoId YouTube 비디오 ID
  * @returns YouTubeVideoInfo 객체
@@ -213,32 +316,121 @@ async function getYouTubeVideoInfo(videoId) {
     // YouTube URL 생성
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     try {
-        // ytdl-core를 사용하여 영상 정보 가져오기
-        const info = await ytdl.getInfo(url);
-        // YouTubeVideoInfo 형식으로 변환
-        const videoInfo = {
+        // 기본 정보 (오류 발생시 최소한의 정보라도 반환하기 위함)
+        const basicInfo = {
             id: videoId,
-            title: info.videoDetails.title || null,
+            title: `YouTube Video (${videoId})`,
             url: url,
-            duration: info.videoDetails.lengthSeconds ? parseInt(info.videoDetails.lengthSeconds.toString()) : null,
-            uploadDate: info.videoDetails.publishDate || null,
-            viewCount: info.videoDetails.viewCount ? parseInt(info.videoDetails.viewCount.toString()) : null,
-            likeCount: info.videoDetails.likes ? parseInt(info.videoDetails.likes.toString()) : null,
-            dislikeCount: null, // ytdl-core에서는 지원하지 않음
-            commentCount: null, // ytdl-core에서는 지원하지 않음
-            description: info.videoDetails.description || null,
+            duration: null,
+            uploadDate: null,
+            viewCount: null,
+            likeCount: null,
+            dislikeCount: null,
+            commentCount: null,
+            description: null,
             channel: {
-                id: info.videoDetails.channelId || null,
-                name: info.videoDetails.author.name || null,
-                url: info.videoDetails.author.channel_url || null,
-                subscriberCount: null // ytdl-core에서는 지원하지 않음
+                id: null,
+                name: null,
+                url: null,
+                subscriberCount: null
             },
-            thumbnails: info.videoDetails.thumbnails || null,
-            categories: null, // ytdl-core에서는 지원하지 않음
-            tags: info.videoDetails.keywords || null,
-            isLive: info.videoDetails.isLiveContent || false
+            thumbnails: null,
+            categories: null,
+            tags: null,
+            isLive: null
         };
-        return videoInfo;
+        // 1. YouTube Data API v3 시도 (가장 안정적인 방법)
+        const apiResult = await getYouTubeVideoInfoFromAPI(videoId);
+        if (apiResult) {
+            return apiResult;
+        }
+        // 2. youtube-dl-exec 사용 시도
+        try {
+            console.log(`[youtube-dl-exec 시도] URL: ${url}`);
+            const result = await youtubeDl(url, {
+                dumpSingleJson: true,
+                noCheckCertificates: true,
+                noWarnings: true,
+                skipDownload: true,
+                youtubeSkipDashManifest: true,
+                referer: 'https://www.youtube.com/'
+            });
+            // 결과를 JSON으로 파싱
+            const info = typeof result === 'string' ? JSON.parse(result) : result;
+            // 정보가 있는지 확인
+            if (info && info.title) {
+                console.log(`[youtube-dl-exec 성공] ${url} - 제목: ${info.title}`);
+                // YouTubeVideoInfo 형식으로 변환
+                return {
+                    id: videoId,
+                    title: info.title || basicInfo.title,
+                    url: url,
+                    duration: info.duration || null,
+                    uploadDate: info.upload_date || null,
+                    viewCount: info.view_count || null,
+                    likeCount: info.like_count || null,
+                    dislikeCount: info.dislike_count || null,
+                    commentCount: info.comment_count || null,
+                    description: info.description || null,
+                    channel: {
+                        id: info.channel_id || null,
+                        name: info.uploader || info.channel || null,
+                        url: info.channel_url || null,
+                        subscriberCount: info.subscriber_count || null
+                    },
+                    thumbnails: info.thumbnails || null,
+                    categories: info.categories || null,
+                    tags: info.tags || null,
+                    isLive: info.is_live || false
+                };
+            }
+            else {
+                throw new Error('youtube-dl-exec 결과에 필요한 정보가 없습니다');
+            }
+        }
+        catch (youtubeDlError) {
+            console.warn(`[youtube-dl-exec 실패] ${url}: ${youtubeDlError}. ytdl-core 시도합니다.`);
+            // 3. youtube-dl-exec 실패 시 ytdl-core 시도
+            try {
+                console.log(`[ytdl-core 시도] URL: ${url}`);
+                const info = await ytdl.getInfo(url);
+                // 정보가 있는지 확인
+                if (info && info.videoDetails) {
+                    console.log(`[ytdl-core 성공] ${url} - 제목: ${info.videoDetails.title}`);
+                    // YouTubeVideoInfo 형식으로 변환
+                    return {
+                        id: videoId,
+                        title: info.videoDetails.title || basicInfo.title,
+                        url: url,
+                        duration: info.videoDetails.lengthSeconds ? parseInt(info.videoDetails.lengthSeconds.toString()) : null,
+                        uploadDate: info.videoDetails.publishDate || null,
+                        viewCount: info.videoDetails.viewCount ? parseInt(info.videoDetails.viewCount.toString()) : null,
+                        likeCount: info.videoDetails.likes ? parseInt(info.videoDetails.likes.toString()) : null,
+                        dislikeCount: null, // ytdl-core에서는 지원하지 않음
+                        commentCount: null, // ytdl-core에서는 지원하지 않음
+                        description: info.videoDetails.description || null,
+                        channel: {
+                            id: info.videoDetails.channelId || null,
+                            name: info.videoDetails.author.name || null,
+                            url: info.videoDetails.author.channel_url || null,
+                            subscriberCount: null // ytdl-core에서는 지원하지 않음
+                        },
+                        thumbnails: info.videoDetails.thumbnails || null,
+                        categories: null, // ytdl-core에서는 지원하지 않음
+                        tags: info.videoDetails.keywords || null,
+                        isLive: info.videoDetails.isLiveContent || false
+                    };
+                }
+                else {
+                    throw new Error('ytdl-core 결과에 필요한 정보가 없습니다');
+                }
+            }
+            catch (ytdlError) {
+                console.error(`[ytdl-core 실패] ${url}: ${ytdlError}. 기본 정보만 반환합니다.`);
+                // 모든 방법 실패 시 기본 정보 반환
+                return basicInfo;
+            }
+        }
     }
     catch (error) {
         console.error(`YouTube 비디오 정보를 가져오는 중 오류 발생: ${error}`);
@@ -276,6 +468,21 @@ async function getYouTubeVideoInfoHandler(args) {
     }
     try {
         const videoInfo = await getYouTubeVideoInfo(videoId);
+        // 정보를 가져왔지만 제목이 기본값인 경우 경고 추가
+        if (videoInfo.title === `YouTube Video (${videoId})`) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            warning: "YouTube API에서 모든 비디오 정보를 가져오지 못했습니다. 기본 정보만 제공됩니다.",
+                            info: videoInfo
+                        }, null, 2),
+                    },
+                ],
+                isError: false,
+            };
+        }
         return {
             content: [
                 {
@@ -317,6 +524,22 @@ async function getYouTubeVideoInfoByUrlHandler(args) {
     }
     try {
         const videoInfo = await getYouTubeVideoInfoByUrl(url);
+        // 정보를 가져왔지만 제목이 기본값인 경우 경고 추가
+        const videoId = extractYoutubeId(url);
+        if (videoInfo.title === `YouTube Video (${videoId})`) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            warning: "YouTube API에서 모든 비디오 정보를 가져오지 못했습니다. 기본 정보만 제공됩니다.",
+                            info: videoInfo
+                        }, null, 2),
+                    },
+                ],
+                isError: false,
+            };
+        }
         return {
             content: [
                 {
@@ -579,8 +802,6 @@ async function processVideosAsync(jobId, videoUrls, bucket) {
                 if (!videoId) {
                     throw new Error(`Could not extract YouTube ID from URL: ${url}`);
                 }
-                // 1) 동영상 정보 가져오기 (ytdl-core 사용)
-                const info = await ytdl.getInfo(url);
                 // YouTube ID를 포함한 파일명 생성
                 const fileName = `youtube_${videoId}.mp4`;
                 const localPath = path.join(tempDir, fileName);
@@ -612,35 +833,38 @@ async function processVideosAsync(jobId, videoUrls, bucket) {
                     }
                     continue;
                 }
-                // 2) 동영상 다운로드 (ytdl-core 사용)
-                await new Promise((resolve, reject) => {
-                    const videoStream = ytdl(url, {
-                        quality: 'highest',
-                        filter: format => format.container === 'mp4'
-                    });
-                    const fileStream = fs.createWriteStream(localPath);
-                    videoStream.pipe(fileStream);
-                    videoStream.on('error', (err) => {
-                        console.error(`[job ${jobId}] Error downloading video: ${err}`);
-                        reject(err);
-                    });
-                    fileStream.on('finish', () => {
-                        resolve();
-                    });
-                    fileStream.on('error', (err) => {
-                        console.error(`[job ${jobId}] Error writing video file: ${err}`);
-                        reject(err);
-                    });
-                    // 타임아웃 설정 (3분)
-                    const timeout = setTimeout(() => {
-                        videoStream.destroy();
-                        fileStream.close();
-                        reject(new Error(`Download timeout for ${url}`));
-                    }, 180000);
-                    fileStream.on('close', () => {
-                        clearTimeout(timeout);
-                    });
-                });
+                // 1) 동영상 정보 가져오기 (ytdl-core 사용)
+                let info;
+                try {
+                    info = await ytdl.getInfo(url);
+                }
+                catch (infoError) {
+                    console.warn(`[job ${jobId}] 비디오 정보 가져오기 오류, 다운로드 계속 진행: ${infoError}`);
+                    // 정보 가져오기 실패해도 다운로드는 시도
+                }
+                // 2) 동영상 다운로드
+                let downloadSuccess = false;
+                try {
+                    downloadSuccess = await downloadVideo(url, localPath, jobId);
+                    // 다운로드 실패 시
+                    if (!downloadSuccess) {
+                        throw new Error(`[job ${jobId}] 다운로드 실패, 다음 비디오로 넘어갑니다: ${url}`);
+                    }
+                }
+                catch (downloadError) {
+                    console.error(`[job ${jobId}] 비디오 다운로드 실패: ${downloadError}`);
+                    // 다운로드 실패 시 다음 비디오로 넘어감
+                    const currentJob = jobsMap.get(jobId);
+                    if (currentJob) {
+                        currentJob.progress = {
+                            current: i + 1,
+                            total: videoUrls.length,
+                            percentage: Math.round(((i + 1) / videoUrls.length) * 100)
+                        };
+                        jobsMap.set(jobId, currentJob);
+                    }
+                    continue;
+                }
                 // AWS 리전 값 확인
                 if (!AWS_REGION) {
                     throw new Error("AWS_REGION is not defined. Please set the AWS_REGION environment variable.");
@@ -736,6 +960,87 @@ async function processVideosAsync(jobId, videoUrls, bucket) {
         }
     }
     return publicUrls;
+}
+/**
+ * YouTube 비디오를 다운로드하는 함수
+ * @param url YouTube 비디오 URL
+ * @param localPath 저장할 로컬 경로
+ * @param jobId 작업 ID
+ * @returns 다운로드 성공 여부
+ */
+async function downloadVideo(url, localPath, jobId) {
+    // 1. youtube-dl-exec 사용 시도
+    try {
+        console.log(`[youtube-dl-exec 다운로드 시도] URL: ${url}`);
+        await youtubeDl(url, {
+            output: localPath,
+            format: 'best[ext=mp4]/best',
+            noCheckCertificates: true,
+            noWarnings: true,
+            referer: 'https://www.youtube.com/'
+        });
+        // 파일이 존재하고 크기가 0보다 큰지 확인
+        if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+            console.log(`[youtube-dl-exec 다운로드 성공] ${url}`);
+            return true;
+        }
+        else {
+            throw new Error(`Downloaded file is empty or does not exist: ${localPath}`);
+        }
+    }
+    catch (youtubeDlError) {
+        console.warn(`[youtube-dl-exec 다운로드 실패] ${url}: ${youtubeDlError}. ytdl-core 시도합니다.`);
+        // 2. youtube-dl-exec 실패 시 ytdl-core 시도
+        try {
+            console.log(`[ytdl-core 다운로드 시도] URL: ${url}`);
+            await new Promise((resolve, reject) => {
+                try {
+                    const videoStream = ytdl(url, {
+                        quality: 'highest',
+                        filter: format => format.container === 'mp4'
+                    });
+                    const fileStream = fs.createWriteStream(localPath);
+                    videoStream.pipe(fileStream);
+                    videoStream.on('error', (err) => {
+                        console.error(`[job ${jobId}] Error downloading video: ${err}`);
+                        reject(err);
+                    });
+                    fileStream.on('finish', () => {
+                        resolve();
+                    });
+                    fileStream.on('error', (err) => {
+                        console.error(`[job ${jobId}] Error writing video file: ${err}`);
+                        reject(err);
+                    });
+                    // 타임아웃 설정 (3분)
+                    const timeout = setTimeout(() => {
+                        videoStream.destroy();
+                        fileStream.close();
+                        reject(new Error(`Download timeout for ${url}`));
+                    }, 180000);
+                    fileStream.on('close', () => {
+                        clearTimeout(timeout);
+                    });
+                }
+                catch (streamError) {
+                    console.error(`[job ${jobId}] Error creating video stream: ${streamError}`);
+                    reject(streamError);
+                }
+            });
+            // 파일이 존재하고 크기가 0보다 큰지 확인
+            if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+                console.log(`[ytdl-core 다운로드 성공] ${url}`);
+                return true;
+            }
+            else {
+                throw new Error(`Downloaded file is empty or does not exist: ${localPath}`);
+            }
+        }
+        catch (ytdlError) {
+            console.error(`[ytdl-core 다운로드 실패] ${url}: ${ytdlError}`);
+            return false;
+        }
+    }
 }
 ////////////////////////////////////////////////////////////////////////////////
 // SETTING UP THE MCP SERVER
